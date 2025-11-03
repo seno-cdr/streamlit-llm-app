@@ -4,8 +4,15 @@ import streamlit as st
 
 load_dotenv()
 
+# Try multiple import paths for ChatOpenAI to support different langchain versions.
+ChatOpenAI = None
+LLMChain = None
+ChatPromptTemplate = None
+SystemMessagePromptTemplate = None
+HumanMessagePromptTemplate = None
+import traceback
 try:
-    # LangChain imports
+    # Preferred import (works for many langchain versions)
     from langchain.chat_models import ChatOpenAI
     from langchain.chains import LLMChain
     from langchain.prompts import (
@@ -13,15 +20,34 @@ try:
         SystemMessagePromptTemplate,
         HumanMessagePromptTemplate,
     )
-except Exception as e:
-    # If imports fail, show the full traceback in the UI to help debugging.
-    import traceback
-
-    tb = traceback.format_exc()
-    st.warning(
-        "langchain のインポートに失敗しました。環境に langchain がインストールされているか、`requirements.txt` を確認してください。\n詳細:"
-    )
-    st.code(tb)
+except Exception:
+    try:
+        # Some langchain builds expose ChatOpenAI under a submodule
+        from langchain.chat_models.openai import ChatOpenAI
+        from langchain.chains import LLMChain
+        from langchain.prompts import (
+            ChatPromptTemplate,
+            SystemMessagePromptTemplate,
+            HumanMessagePromptTemplate,
+        )
+    except Exception:
+        try:
+            # Other langchain versions use a generic OpenAI LLM class
+            from langchain import OpenAI as ChatOpenAI
+            from langchain.chains import LLMChain
+            # prompts API might differ; fall back to simple string prompt if missing
+            from langchain.prompts import (
+                ChatPromptTemplate,
+                SystemMessagePromptTemplate,
+                HumanMessagePromptTemplate,
+            )
+        except Exception:
+            # Keep ChatOpenAI as None — we'll fall back to direct openai API in that case.
+            tb = traceback.format_exc()
+            st.warning(
+                "langchain の ChatOpenAI をインポートできませんでした。\n`langchain` のバージョンと `requirements.txt` を確認してください。\n代替として OpenAI SDK を直接使って動かします。\n詳細:"
+            )
+            st.code(tb)
 
 
 st.title("LangChain を使った簡易 LLM アプリ")
@@ -76,20 +102,37 @@ def get_llm_response(input_text: str, role: str) -> str:
 
     system_prompt = ROLE_SYSTEM_PROMPTS.get(role, ROLE_SYSTEM_PROMPTS["AI専門家"])
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            SystemMessagePromptTemplate.from_template(system_prompt),
-            HumanMessagePromptTemplate.from_template("{user_input}"),
+    # If ChatOpenAI is available from langchain, use LLMChain as before.
+    if ChatOpenAI is not None and LLMChain is not None and ChatPromptTemplate is not None:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                SystemMessagePromptTemplate.from_template(system_prompt),
+                HumanMessagePromptTemplate.from_template("{user_input}"),
+            ]
+        )
+
+        # ChatOpenAI を使って LLM 呼び出し（model_name は環境に応じて変更してください）
+        llm = ChatOpenAI(temperature=0.2, model_name="gpt-3.5-turbo")
+        chain = LLMChain(llm=llm, prompt=prompt)
+
+        # LLMChain.run は prompt の変数名に合わせて kwargs を渡す
+        response = chain.run(user_input=input_text)
+        return response
+
+    # Fallback: use OpenAI SDK directly if langchain ChatOpenAI is unavailable
+    try:
+        import openai
+
+        openai.api_key = api_key
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": input_text},
         ]
-    )
-
-    # ChatOpenAI を使って LLM 呼び出し（model_name は環境に応じて変更してください）
-    llm = ChatOpenAI(temperature=0.2, model_name="gpt-3.5-turbo")
-    chain = LLMChain(llm=llm, prompt=prompt)
-
-    # LLMChain.run は prompt の変数名に合わせて kwargs を渡す
-    response = chain.run(user_input=input_text)
-    return response
+        resp = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages)
+        return resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        # Re-raise with context
+        raise RuntimeError(f"LLM 呼び出しに失敗しました: {e}")
 
 
 if st.button("実行"):
