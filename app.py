@@ -13,11 +13,15 @@ try:
         SystemMessagePromptTemplate,
         HumanMessagePromptTemplate,
     )
-except Exception:
-    # If imports fail, show a helpful message in the UI.
+except Exception as e:
+    # If imports fail, show the full traceback in the UI to help debugging.
+    import traceback
+
+    tb = traceback.format_exc()
     st.warning(
-        "langchain がインストールされていないかインポートに失敗しました。`requirements.txt` を確認してください。"
+        "langchain のインポートに失敗しました。環境に langchain がインストールされているか、`requirements.txt` を確認してください。\n詳細:"
     )
+    st.code(tb)
 
 
 st.title("LangChain を使った簡易 LLM アプリ")
